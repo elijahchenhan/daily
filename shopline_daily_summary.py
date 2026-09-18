@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-彙整飛航模飾 Shopline 訂單業績（可統計「昨天整天」或「今天截至目前」），並透過 LINE Messaging API 廣播訊息。
+彙整飛航模飾 Shopline 訂單業績（可統計「昨天整天」或「今天截至目前」），並透過 LINE Messaging API
+推播（push）訊息到指定的 LINE 群組。
 
 與 Claude 排程版本的差異：
 - Token 一律從環境變數讀取（SHOPLINE_TOKEN / LINE_TOKEN），不寫死在檔案裡，
   請在 GitHub repo 的 Settings > Secrets and variables > Actions 設定同名的 Secrets。
+- 改用 push API 送到指定群組（TARGET_GROUP_ID），不再是 broadcast 給所有好友。
 """
 import os
 import sys
@@ -20,8 +22,11 @@ LINE_TOKEN = os.environ.get("LINE_TOKEN")
 if not SHOPLINE_TOKEN or not LINE_TOKEN:
     sys.exit("錯誤：找不到環境變數 SHOPLINE_TOKEN 或 LINE_TOKEN，請確認 GitHub Actions Secrets 已設定。")
 
+# 要接收每日業績訊息的 LINE 群組 ID（透過 webhook 抓到的 groupId）
+TARGET_GROUP_ID = "C5e11d08f397874c72929474565967233"
+
 SHOPLINE_API = "https://open.shopline.io/v1/orders"
-LINE_BROADCAST_API = "https://api.line.me/v2/bot/message/broadcast"
+LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
 TAIPEI = timezone(timedelta(hours=8))
 
@@ -203,10 +208,10 @@ def build_flex_message(stats, day_label, title="📊 業績日報"):
     return {"type": "flex", "altText": alt_text, "contents": bubble}
 
 
-def send_line_broadcast(flex_message):
-    body = json.dumps({"messages": [flex_message]}).encode("utf-8")
+def send_line_push(flex_message):
+    body = json.dumps({"to": TARGET_GROUP_ID, "messages": [flex_message]}).encode("utf-8")
     req = urllib.request.Request(
-        LINE_BROADCAST_API,
+        LINE_PUSH_API,
         data=body,
         method="POST",
         headers={
@@ -259,8 +264,8 @@ def main():
         print("\n[dry-run] 未送出 LINE 訊息")
         return
 
-    status, resp_body = send_line_broadcast(flex_message)
-    print(f"\nLINE broadcast HTTP status: {status}")
+    status, resp_body = send_line_push(flex_message)
+    print(f"\nLINE push HTTP status: {status}")
     print(resp_body)
 
 
