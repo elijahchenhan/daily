@@ -55,3 +55,4 @@ jobs:
             ARGS="$ARGS --dry-run"
           fi
           python3 shopline_daily_summary.py $ARGS
+ 
