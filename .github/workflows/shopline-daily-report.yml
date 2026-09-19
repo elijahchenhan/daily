@@ -1,11 +1,11 @@
 name: Shopline Daily Report to LINE
- 
+
 on:
   schedule:
-    # 07:00 UTC = 15:00 Asia/Taipei -> 今日即時業績
-    - cron: '0 7 * * *'
-    # 16:02 UTC = 隔天 00:02 Asia/Taipei -> 昨日完整日報
-    - cron: '2 16 * * *'
+    # 04:00 UTC = 12:00 Asia/Taipei（提早 3 小時抵銷 GitHub 排程延遲，目標下午 3 點送達）-> 今日即時業績
+    - cron: '0 4 * * *'
+    # 13:02 UTC = 21:02 Asia/Taipei（提早 3 小時抵銷 GitHub 排程延遲，目標凌晨 00:02 送達）-> 昨日完整日報
+    - cron: '2 13 * * *'
   workflow_dispatch:
     inputs:
       period:
@@ -21,30 +21,30 @@ on:
         required: false
         default: true
         type: boolean
- 
+
 jobs:
   send-report:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
- 
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
- 
+
       - name: Decide which period this run is for
         id: period
         run: |
-          if [ "${{ github.event.schedule }}" = "0 7 * * *" ]; then
+          if [ "${{ github.event.schedule }}" = "0 4 * * *" ]; then
             echo "period=today" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "2 16 * * *" ]; then
+          elif [ "${{ github.event.schedule }}" = "2 13 * * *" ]; then
             echo "period=yesterday" >> "$GITHUB_OUTPUT"
           else
             echo "period=${{ github.event.inputs.period || 'yesterday' }}" >> "$GITHUB_OUTPUT"
           fi
- 
+
       - name: Run Shopline -> LINE report
         env:
           SHOPLINE_TOKEN: ${{ secrets.SHOPLINE_TOKEN }}
@@ -55,4 +55,3 @@ jobs:
             ARGS="$ARGS --dry-run"
           fi
           python3 shopline_daily_summary.py $ARGS
- 
