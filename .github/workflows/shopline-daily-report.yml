@@ -1,11 +1,23 @@
 name: Shopline Daily Report to LINE
 
+# 每次執行的標題會標上區間，例如 [today] / [yesterday] / [dry-run]
+# 防重複機制靠這個標題判斷「同一個區間是否已經發送成功」
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '[dry-run] Shopline 報表'
+  || format('[{0}] Shopline 報表',
+       (github.event.schedule == '0 4 * * *' || github.event.schedule == '32 4 * * *') && 'today'
+       || (github.event_name == 'schedule' && 'yesterday' || inputs.period)) }}
+
 on:
   schedule:
     # 04:00 UTC = 12:00 Asia/Taipei（提早 3 小時抵銷 GitHub 排程延遲，目標下午 3 點送達）-> 今日即時業績
     - cron: '0 4 * * *'
+    # 04:32 UTC = 12:32 Asia/Taipei -> 今日即時業績【備用】主排程成功就自動略過
+    - cron: '32 4 * * *'
     # 13:02 UTC = 21:02 Asia/Taipei（提早 3 小時抵銷 GitHub 排程延遲，目標凌晨 00:02 送達）-> 昨日完整日報
     - cron: '2 13 * * *'
+    # 13:32 UTC = 21:32 Asia/Taipei -> 昨日完整日報【備用】主排程成功就自動略過
+    - cron: '32 13 * * *'
   workflow_dispatch:
     inputs:
       period:
@@ -22,35 +34,58 @@ on:
         default: true
         type: boolean
 
+# 同一區間的主排程與備用排程不會同時跑，後到的會排隊等前一個結束後再檢查
+concurrency:
+  group: shopline-report-${{ (github.event.schedule == '0 4 * * *' || github.event.schedule == '32 4 * * *') && 'today' || (github.event_name == 'schedule' && 'yesterday' || inputs.period) }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read   # 讓防重複檢查能讀取過去的執行紀錄
+
 jobs:
   send-report:
-    runs-on: ubuntu-latest
+    # 固定版本，避開 10/19 起 ubuntu-latest 改為 Ubuntu 26
+    runs-on: ubuntu-24.04
+    env:
+      PERIOD: ${{ (github.event.schedule == '0 4 * * *' || github.event.schedule == '32 4 * * *') && 'today' || (github.event_name == 'schedule' && 'yesterday' || inputs.period) }}
     steps:
+      - name: Skip if this period was already sent
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          WF=$(basename "${GITHUB_WORKFLOW_REF%@*}")
+          SINCE=$(date -u -d '12 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          DONE=$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${WF}/runs" \
+            -f status=success -f created=">=${SINCE}" -f per_page=50 \
+            --jq "[.workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | select(.display_title | startswith(\"[${PERIOD}]\"))] | length")
+          echo "近 12 小時內 [${PERIOD}] 已成功的執行數：${DONE}"
+          if [ "${DONE}" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::[${PERIOD}] 報表今天已經發送過，這次略過，不重複發送。"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
+        if: steps.check.outputs.skip != 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.check.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Decide which period this run is for
-        id: period
-        run: |
-          if [ "${{ github.event.schedule }}" = "0 4 * * *" ]; then
-            echo "period=today" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "2 13 * * *" ]; then
-            echo "period=yesterday" >> "$GITHUB_OUTPUT"
-          else
-            echo "period=${{ github.event.inputs.period || 'yesterday' }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Run Shopline -> LINE report
+        if: steps.check.outputs.skip != 'true'
         env:
           SHOPLINE_TOKEN: ${{ secrets.SHOPLINE_TOKEN }}
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
         run: |
-          ARGS="--period ${{ steps.period.outputs.period }}"
+          ARGS="--period ${PERIOD}"
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
           fi
